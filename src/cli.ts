@@ -9,15 +9,17 @@ import * as os from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { loadEnvFile } from 'node:process'
 import { parseArgs } from 'node:util'
-import { runAgent } from './agent.js'
+import { latestSystemMessages, runAgent } from './agent.js'
 import { Tui } from './tui.js'
 import { builtinTools } from './tools.js'
 import { openSession } from './session.js'
-import { preferencePrompt } from './memory.js'
+import { preferenceInstructions, preferencePrompt } from './memory.js'
+import { discoverSkills } from './skills.js'
 import type { Model, Context } from './llm.js'
 
 /** 固定 system prompt */
-const SYSTEM_PROMPT = '你是一个编码助手。用提供的工具读写文件和执行命令来完成任务。先阅读再修改，修改后可运行命令验证。'
+const SYSTEM_PROMPT = `你是一个编码助手。用提供的工具读写文件和执行命令来完成任务。先阅读再修改，修改后可运行命令验证。
+按最近的技能清单判断任务。若用途匹配，选最相关的一项，用 read_file 读取清单给出的完整路径，再按正文执行。若读取失败，本次技能任务就此结束，直接向用户报告工具返回的完整路径和失败原因，不再猜测步骤或改用其他工具执行。无匹配时直接处理，不读取技能。`
 
 async function main() {
   const { values } = parseArgs({ options: { continue: { type: 'boolean', short: 'c' } } })
@@ -44,7 +46,9 @@ async function main() {
   const cwdKey = createHash('sha256').update(process.cwd()).digest('hex')
   const dir = path.join(os.homedir(), '.minipi', 'sessions', cwdKey)
   const session = await openSession(dir, values.continue === true)
+  let skillPrompt = await discoverSkills()
   const context: Context = {
+    systemPrompt: SYSTEM_PROMPT + '\n\n' + preferenceInstructions,
     messages: session.messages,
   }
 
@@ -55,18 +59,32 @@ async function main() {
   tui.onPrompt(async (text) => {
     try {
       tui.setBusy(true)
+      if (text === '/reload') {
+        skillPrompt = await discoverSkills()
+        tui.printText('技能清单已刷新。\n')
+        return
+      }
       const ctrl = new AbortController()
       tui.onAbort(() => ctrl.abort())  // 每轮新建 AbortController，需重新注册回调指向新的 controller
-      // 先保存用户输入，即使首轮模型没有回复也能续聊。
-      context.messages.push({ role: 'user', content: text })
+      const previousLength = context.messages.length
       try {
-        await session.save(context.messages)
-      } catch (e) {
-        context.messages.pop()
-        throw e
+        const current = { skills: skillPrompt, preferences: await preferencePrompt() }
+        const latest = latestSystemMessages(context.messages)
+        for (const section of ['skills', 'preferences'] as const) {
+          if (latest.get(section)?.content !== current[section]) {
+            context.messages.push({ role: 'system', section, content: current[section] })
+          }
+        }
+      } finally {
+        // 即使偏好读取失败，用户输入仍可续聊；落盘失败则回退本轮追加。
+        context.messages.push({ role: 'user', content: text })
+        try {
+          await session.save(context.messages)
+        } catch (e) {
+          context.messages.length = previousLength
+          throw e
+        }
       }
-      // 每轮请求前取最新偏好，使本会话和其他会话的修改都能生效。
-      context.systemPrompt = SYSTEM_PROMPT + '\n\n' + await preferencePrompt()
       for await (const ev of runAgent(model, context, tools, ctrl.signal)) {
         switch (ev.type) {
           case 'assistant_text': tui.printText(ev.delta); break

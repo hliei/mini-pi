@@ -80,7 +80,7 @@ describe('session persistence', () => {
     // 在请求模型时退出：实际 CLI 必须已经保存本次输入，且空启动不能抢占最近会话。
     const probe = `globalThis.fetch = (_url, init) => {
       const messages = JSON.parse(init.body).messages
-      console.log('REQUEST:' + JSON.stringify({ system: messages[0].content,
+      console.log('REQUEST:' + JSON.stringify({ systems: messages.filter(m => m.role === 'system').map(m => m.content),
         prompts: messages.filter(m => m.role === 'user').map(m => m.content) }))
       process.exit(0)
     }`
@@ -97,7 +97,10 @@ describe('session persistence', () => {
     run(dir, '')
     expect(run(dir, 'A2\n', '-c').prompts).toEqual(['A1', 'A2'])
     await fs.writeFile(path.join(dir, '.minipi', 'MEMORY.md'), '周报先放风险表\n')
-    expect(run(projectB, 'B1\n', '-c')).toEqual({ prompts: ['B1'], system: expect.stringContaining('周报先放风险表') })
+    const fresh = run(projectB, 'B1\n', '-c')
+    expect(fresh.prompts).toEqual(['B1'])
+    expect(fresh.systems[0]).not.toContain('周报先放风险表')
+    expect(fresh.systems.at(-1)).toContain('周报先放风险表')
     expect(run(dir, 'A3\n').prompts).toEqual(['A3'])
     expect(run(dir, 'A4\n', '--continue').prompts).toEqual(['A3', 'A4'])
   })
@@ -114,7 +117,7 @@ describe('session persistence', () => {
     await fs.utimes(second.file, 1, 1)
     await fs.appendFile(first.file, '{"role":"system","content":"invalid"}\n{"role":"user","content":[null]}\n{"role":')
     const broken = path.join(dir, 'broken.jsonl')
-    await fs.writeFile(broken, 'not json')
+    await fs.writeFile(broken, '{"role":"system","section":"skills","content":"catalog"}\n{"role":"user",')
     await fs.utimes(broken, new Date('2100-01-01'), new Date('2100-01-01'))
 
     const resumed = await openSession(dir, true)

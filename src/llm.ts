@@ -22,11 +22,13 @@ export type ContentBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string }
 
-/** 消息：user / assistant 共用同一结构 */
+/** 同类系统消息每次给出完整内容，在聊天中保留生效位置。 */
+export type SystemMessage = { role: 'system'; section: 'skills' | 'preferences'; content: string }
+
 export type Message = {
   role: 'user' | 'assistant'
   content: string | ContentBlock[]
-}
+} | SystemMessage
 
 /** Context：纯 JSON，可 stringify 落盘 */
 export type Context = {

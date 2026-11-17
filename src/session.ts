@@ -23,7 +23,12 @@ function readMessages(data: string): Message[] {
     if (!line.trim()) continue
     let value: unknown
     try { value = JSON.parse(line) } catch { continue }
-    if (!isRecord(value) || (value.role !== 'user' && value.role !== 'assistant')) continue
+    if (!isRecord(value)) continue
+    if (value.role === 'system' && (value.section === 'skills' || value.section === 'preferences') && typeof value.content === 'string') {
+      messages.push({ role: 'system', section: value.section, content: value.content })
+      continue
+    }
+    if (value.role !== 'user' && value.role !== 'assistant') continue
     const { role, content } = value
     if (typeof content === 'string' || (Array.isArray(content) && content.every(isBlock))) {
       messages.push({ role, content })
@@ -42,7 +47,9 @@ async function findRecentSession(dir: string) {
     const data = await fs.readFile(file, 'utf8')
     const messages = readMessages(data)
     // 崩溃可能留下半行；下次追加从新行开始。
-    if (messages.length) return { file, messages, separator: data.endsWith('\n') ? '' : '\n' }
+    if (messages.some(message => message.role !== 'system')) {
+      return { file, messages, separator: data.endsWith('\n') ? '' : '\n' }
+    }
   }
 }
 

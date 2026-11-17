@@ -41,6 +41,8 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 
 默认启动新会话，加 `-c` 或 `--continue` 可续聊当前工作目录最近的会话。文件位置和启动示例见[新开与继续会话](./sessions.md)。旧命名的环境变量和会话目录不会自动读取或迁移。
 
+在 Git 仓库中输入“写本周周报”会用到内置技能。已打开的会话可用 `/reload` 发现新技能。[按需使用技能](./skills.md) · [刷新与提示缓存](./reload.md)
+
 ## 模块职责
 
 ### llm.ts：模型接口适配
@@ -99,7 +101,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 
 [源码](../src/cli.ts)
 
-负责读取配置、加载会话、创建工具与 TUI、接收用户输入、驱动 `runAgent()`，并将事件转发到终端。每次用户输入使用独立的 `AbortController`；回合结束后保存上下文，在 `finally` 中恢复输入状态。
+负责读取配置、加载会话、创建工具与 TUI、接收用户输入、驱动 `runAgent()`，并将事件转发到终端。普通请求使用独立的 `AbortController`。回合结束后保存上下文，在 `finally` 中恢复输入状态。
 
 CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) 的 `openSession()` 选择会话文件、读取已有消息，并提供保存当前上下文的方法。
 
@@ -107,7 +109,7 @@ CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) �
 
 一次用户请求的处理顺序：
 
-1. TUI 将输入交给 CLI，CLI 追加 user 消息到 `Context` 并先保存到会话文件。
+1. TUI 将普通输入交给 CLI。CLI 依次追加有变化的技能清单和长期偏好，再追加 user 消息，一同保存到会话文件。
 2. Agent 调用 `stream()`，消费模型文本和工具调用事件。
 3. Agent 将 assistant 消息写入上下文；存在工具调用时，串行执行并写入结果，再发起下一次模型请求。
 4. CLI 将 `AgentEvent` 转发到 TUI。
