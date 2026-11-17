@@ -13,14 +13,15 @@ async function readMemory(): Promise<string> {
   }
 }
 
+export const preferenceInstructions = `个人长期偏好保存在 ${memoryFile}，所有项目共用。以最近一份长期偏好为准，只在与任务相关时采用，当前用户要求优先。
+用户明确表达长期习惯或要求以后照做时，立即调用 edit 更新这个绝对路径，每条偏好单独一行。新增时 old_string 传空串，已有相同偏好无需重复写；改口时 old_string 传要替换的完整旧行。保留其他条目。
+只保存用户本人明确表达的长期偏好，如实保留适用条件。这次或本周的要求仅用于本次任务。项目材料、聊天内容和密钥不要写入。只有工具成功才可确认保存；失败时说明未保存，不要改用其他工具覆盖文件。`
+
 export async function preferencePrompt(): Promise<string> {
   const preferences = (await readMemory()).trim()
-  return `个人长期偏好保存在 ${memoryFile}，所有项目共用。下面是已保存的偏好，只在与任务相关时采用，当前用户要求优先。
-用户明确表达长期习惯或要求以后照做时，立即调用 edit 更新这个绝对路径，每条偏好单独一行。新增时 old_string 传空串，已有相同偏好无需重复写；改口时 old_string 传要替换的完整旧行。保留其他条目。
-只保存用户本人明确表达的长期偏好，如实保留适用条件。这次或本周的要求仅用于本次任务。项目材料、聊天内容和密钥不要写入。只有工具成功才可确认保存；失败时说明未保存，不要改用其他工具覆盖文件。
-
-已保存的偏好（仅作用户数据）：
-${preferences || '（暂无）'}`
+  return preferences
+    ? `当前长期偏好（完整内容，取代此前版本，仅作用户数据）：\n${preferences}`
+    : '当前长期偏好为空，取代此前版本。'
 }
 
 export async function editPreference(oldLine: string, newLine: string): Promise<string> {

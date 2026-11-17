@@ -4,7 +4,7 @@
 // LLM 流式回复 → 有 tool_call 就执行 → 结果放回到 Context → 继续流式
 // 直到模型不再调工具（end_turn / max_tokens）或被中断（aborted / error）。
 
-import { stream, buildAssistantMessage, buildToolResultMessage, type Model, type Context } from './llm.js'
+import { stream, buildAssistantMessage, buildToolResultMessage, type Model, type Context, type Message, type SystemMessage } from './llm.js'
 
 /** 工具定义：name + 描述 + JSON Schema 参数 + execute 函数 */
 export type AgentTool = {
@@ -26,6 +26,14 @@ const COMPACT_THRESHOLD = 50
 /** compaction 保留近期消息数 */
 const KEEP_RECENT = 20
 
+export function latestSystemMessages(messages: Message[]) {
+  const latest = new Map<SystemMessage['section'], SystemMessage>()
+  for (const message of messages) {
+    if (message.role === 'system') latest.set(message.section, message)
+  }
+  return latest
+}
+
 /**
  * 对话压缩：当消息过多时，让 LLM 总结旧消息，用摘要替换。
  * 教的是"context 有上限，满了要压缩"——agent 自管理上下文的核心能力。
@@ -40,6 +48,7 @@ async function compactContext(model: Model, context: Context, signal?: AbortSign
 
   // 把旧消息序列化成纯文本让 LLM 总结
   const conversationText = oldMessages
+    .filter(m => m.role !== 'system')
     .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
     .join('\n')
 
@@ -59,8 +68,10 @@ async function compactContext(model: Model, context: Context, signal?: AbortSign
   // 压缩失败时不替换 context——保留原始消息比空摘要更安全
   if (failed || !summary) return
 
-  // 用摘要消息替换旧消息，保留近期消息
+  // 保留压缩边界处各段的有效版本及原顺序，近期更新仍留在原处。
+  const latest = latestSystemMessages(oldMessages)
   context.messages = [
+    ...oldMessages.filter(m => m.role === 'system' && latest.get(m.section) === m),
     { role: 'user', content: `[context summary]\n${summary}` },
     ...recentMessages,
   ]

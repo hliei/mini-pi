@@ -30,6 +30,26 @@ beforeEach(() => { mockStreamFn.mockClear() })
 const model: Model = { apiKey: 'k', model: 'test' }
 
 describe('runAgent', () => {
+  it('压缩时按原顺序保留边界前各段的最后版本和边界后的更新', async () => {
+    const latest = { role: 'system', section: 'skills', content: '新版技能清单' } as const
+    const prefs = { role: 'system', section: 'preferences', content: '风险优先' } as const
+    const cleared = { ...prefs, content: '当前长期偏好为空，取代此前版本。' }
+    const ctx: Context = { messages: [
+      { ...latest, content: '旧版技能清单' }, { ...prefs, content: '结论优先' }, prefs, latest,
+      ...Array.from({ length: 48 }, (_, i) => ({ role: 'user' as const, content: String(i) })),
+      cleared,
+    ] }
+    mockStreamFn.mockImplementation(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'text_delta', delta: '完成' }
+      yield { type: 'done', stopReason: 'end_turn' }
+    })
+    for await (const _ of runAgent(model, ctx, [])) { /* 消费摘要和正常回复 */ }
+    expect(ctx.messages.slice(0, 4)).toEqual([
+      prefs, latest, { role: 'user', content: '[context summary]\n完成' }, { role: 'user', content: '29' },
+    ])
+    expect(ctx.messages.at(-2)).toEqual(cleared)
+  })
+
   it('纯文本回复：一轮就结束', async () => {
     mockStreamFn.mockImplementation(async function* (): AsyncGenerator<StreamEvent> {
       yield { type: 'text_delta', delta: 'Hello' }

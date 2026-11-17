@@ -22,7 +22,7 @@ type ContentBlock =
 type Message = {
   role: 'user' | 'assistant'
   content: string | ContentBlock[]
-}
+} | { role: 'system'; section: 'skills' | 'preferences'; content: string }
 
 type Context = {
   systemPrompt?: string
@@ -94,7 +94,7 @@ type StreamEvent =
 | 内部数据 | API 消息 |
 | --- | --- |
 | 非空 `systemPrompt` | 数组首部的 `role: 'system'` 消息 |
-| 字符串 `content` | 保留原有 user / assistant 角色 |
+| 字符串 `content` | 保留原有 user、assistant 或 system 角色及消息位置 |
 | assistant 中的 `text` | 合并到 assistant 的 `content` |
 | assistant 中的 `tool_use` | 转换为 `tool_calls`，参数 JSON 序列化 |
 | user 中的 `tool_result` | 拆为独立的 `role: 'tool'` 消息 |
@@ -181,7 +181,7 @@ error: output truncated by max_tokens, tool "<name>" args may be incomplete.
 
 ### 中断传播
 
-CLI 为每次用户输入创建新的 `AbortController`，传播链为：
+CLI 为每次模型请求回合创建新的 `AbortController`，中断按下图传播。
 
 ```text
 Ctrl+C → Tui.onAbort 回调 → controller.abort()
@@ -201,7 +201,7 @@ Ctrl+C → Tui.onAbort 回调 → controller.abort()
 | `COMPACT_THRESHOLD` | `50` | 消息数量达到 50 条时尝试压缩 |
 | `KEEP_RECENT` | `20` | 保留最近 20 条消息 |
 
-压缩时，将较早的消息序列化为文本，使用同一模型发起不携带工具的摘要请求。非空摘要写为一条 user 消息，格式为 `[context summary]\n<摘要>`，其后保留最近 20 条消息。例如，55 条消息压缩成功后变为 21 条，前 35 条由摘要替代。
+压缩时，将较早的聊天序列化为文本，使用同一模型发起不携带工具的摘要请求。旧消息中最后一份技能清单和最后一份长期偏好按原顺序保留在摘要前面。非空摘要写为一条 user 消息，格式为 `[context summary]\n<摘要>`，其后保留最近 20 条消息。
 
 signal 已中断、摘要请求报错或中断、摘要为空时，保留原始消息。当前实现按消息数量切分，不估算 token 数，也不调整工具调用与结果的切分边界；消息较长时仍可能超出模型上下文限制。摘要请求以 `max_tokens` 结束且已有文本时，当前实现仍会使用该文本。
 
