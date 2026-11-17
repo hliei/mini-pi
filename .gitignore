@@ -7,5 +7,6 @@ dist/
 tmp.md
 docs/plans/
 docs/specs/
+docs/learn/
 skills-lock.json
 .agents/
