@@ -1,29 +1,26 @@
 #!/usr/bin/env node
 // src/cli.ts
 // 拼装层 —— 把 llm / agent / tui / tools 粘起来，是唯一入口。
-// session 持久化：每轮结束把 context.messages append 到 ~/.minipi/session.jsonl。
 
-import { promises as fs, realpathSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { loadEnvFile } from 'node:process'
+import { parseArgs } from 'node:util'
 import { runAgent } from './agent.js'
 import { Tui } from './tui.js'
 import { builtinTools } from './tools.js'
-import type { Model, Context, Message } from './llm.js'
-
-const SESSION_DIR = path.join(os.homedir(), '.minipi')
-const SESSION_FILE = path.join(SESSION_DIR, 'session.jsonl')
+import { openSession } from './session.js'
+import { preferencePrompt } from './memory.js'
+import type { Model, Context } from './llm.js'
 
 /** 固定 system prompt */
 const SYSTEM_PROMPT = '你是一个编码助手。用提供的工具读写文件和执行命令来完成任务。先阅读再修改，修改后可运行命令验证。'
 
-// 记录已持久化的 message 数量，只 append 新增的。
-// 这是 CLI 进程级状态（非 agent 状态——agent 本身无状态，context 就是状态）。
-let persistedCount = 0
-
 async function main() {
+  const { values } = parseArgs({ options: { continue: { type: 'boolean', short: 'c' } } })
   try {
     loadEnvFile()
   } catch (e) {
@@ -43,10 +40,12 @@ async function main() {
     maxTokens: 4096,
   }
 
-  // 初始化 context：system prompt 用专用字段，messages 从 session 文件加载
+  // 用路径摘要区分工作目录，避免长路径或目录名中的特殊字符影响存储。
+  const cwdKey = createHash('sha256').update(process.cwd()).digest('hex')
+  const dir = path.join(os.homedir(), '.minipi', 'sessions', cwdKey)
+  const session = await openSession(dir, values.continue === true)
   const context: Context = {
-    systemPrompt: SYSTEM_PROMPT,
-    messages: await loadSession(),
+    messages: session.messages,
   }
 
   const tools = builtinTools()
@@ -55,12 +54,19 @@ async function main() {
   // 每轮：用户输入 → runAgent → 事件转发到 TUI → 持久化
   tui.onPrompt(async (text) => {
     try {
-      context.messages.push({ role: 'user', content: text })
-
       tui.setBusy(true)
       const ctrl = new AbortController()
       tui.onAbort(() => ctrl.abort())  // 每轮新建 AbortController，需重新注册回调指向新的 controller
-
+      // 先保存用户输入，即使首轮模型没有回复也能续聊。
+      context.messages.push({ role: 'user', content: text })
+      try {
+        await session.save(context.messages)
+      } catch (e) {
+        context.messages.pop()
+        throw e
+      }
+      // 每轮请求前取最新偏好，使本会话和其他会话的修改都能生效。
+      context.systemPrompt = SYSTEM_PROMPT + '\n\n' + await preferencePrompt()
       for await (const ev of runAgent(model, context, tools, ctrl.signal)) {
         switch (ev.type) {
           case 'assistant_text': tui.printText(ev.delta); break
@@ -74,7 +80,7 @@ async function main() {
         }
       }
 
-      await persistSession(context.messages)
+      await session.save(context.messages)
     } catch (e) {
       console.error(`\n[error] ${(e as Error).message}`)
     } finally {
@@ -84,38 +90,6 @@ async function main() {
 
   tui.start()
 
-}
-
-/** 启动时加载历史 messages，恢复上次对话（导出供测试） */
-export async function loadSession(file: string = SESSION_FILE): Promise<Message[]> {
-  try {
-    const data = await fs.readFile(file, 'utf-8')
-    const lines = data.trim().split('\n').filter(Boolean)
-    // 逐行容错：跳过损坏行而非丢弃全部历史（进程崩溃可能写出半行 JSON）
-    const messages = lines.flatMap(line => {
-      try { return [JSON.parse(line) as Message] } catch { return [] }
-    })
-    persistedCount = messages.length  // 已加载的不重复写
-    return messages
-  } catch {
-    return []  // 文件不存在，从空开始
-  }
-}
-
-/** 持久化 messages 到 session 文件（导出供测试） */
-export async function persistSession(messages: Message[], file: string = SESSION_FILE): Promise<void> {
-  await fs.mkdir(path.dirname(file) || '.', { recursive: true })
-  if (messages.length < persistedCount) {
-    // Compaction replaces the in-memory history, so stale lines must be removed
-    // before append-only persistence can resume from the shorter list.
-    await fs.writeFile(file, messages.map(msg => JSON.stringify(msg)).join('\n') + (messages.length ? '\n' : ''), 'utf-8')
-  } else {
-    const newMessages = messages.slice(persistedCount)
-    for (const msg of newMessages) {
-      await fs.appendFile(file, JSON.stringify(msg) + '\n', 'utf-8')
-    }
-  }
-  persistedCount = messages.length
 }
 
 // 只在直接运行时启动（非 import 时）

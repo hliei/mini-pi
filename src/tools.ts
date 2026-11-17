@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import type { AgentTool } from './agent.js'
+import { editPreference, memoryFile } from './memory.js'
 
 const execAsync = promisify(exec)
 
@@ -62,6 +63,7 @@ const writeFile: AgentTool = {
   },
   execute: async (args) => {
     const { path: filePath, content } = args as { path: string; content: string }
+    if (path.resolve(filePath) === memoryFile) throw new Error('请用 edit 更新个人偏好，每次只改一条')
     await fs.mkdir(path.dirname(filePath) || '.', { recursive: true })
     await fs.writeFile(filePath, content, 'utf-8')
     return `wrote ${filePath} (${content.length} chars)`
@@ -71,18 +73,25 @@ const writeFile: AgentTool = {
 /** edit：局部字符串替换（精确匹配 + 唯一性校验） */
 const edit: AgentTool = {
   name: 'edit',
-  description: '编辑文件：精确替换一段文本。参数：path、old_string、new_string。old_string 必须在文件中唯一匹配，否则报错。',
+  description: '精确替换唯一匹配的文本。编辑个人 MEMORY.md 时，old_string 留空新增一行，否则传完整旧行进行替换。',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: '文件路径' },
-      old_string: { type: 'string', description: '要被替换的文本（必须唯一匹配）' },
+      old_string: { type: 'string', description: '要替换的唯一文本；个人 MEMORY.md 新增偏好时传空串' },
       new_string: { type: 'string', description: '替换后的文本' },
     },
     required: ['path', 'old_string', 'new_string'],
   },
   execute: async (args) => {
-    const { path: filePath, old_string, new_string } = args as { path: string; old_string: string; new_string: string }
+    if (!args || typeof args !== 'object' ||
+        !('path' in args) || typeof args.path !== 'string' ||
+        !('old_string' in args) || typeof args.old_string !== 'string' ||
+        !('new_string' in args) || typeof args.new_string !== 'string') {
+      throw new Error('edit 需要 path、old_string、new_string 三个字符串参数')
+    }
+    const { path: filePath, old_string, new_string } = args
+    if (path.resolve(filePath) === memoryFile) return editPreference(old_string, new_string)
     const content = await fs.readFile(filePath, 'utf-8')
     const count = content.split(old_string).length - 1
     if (count === 0) throw new Error(`old_string not found in ${filePath}`)

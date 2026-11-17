@@ -1,6 +1,6 @@
 # 模块与配置参考
 
-mini-pi 是使用 TypeScript 实现的命令行编码助手，支持 OpenAI 兼容的流式接口、工具调用、上下文压缩和本地会话恢复。源码由五个模块组成；数据结构、事件协议和异常处理见[运行机制与接口](./agent-runtime.md)。
+mini-pi 是使用 TypeScript 实现的命令行编码助手，支持 OpenAI 兼容的流式接口、工具调用、上下文压缩和本地会话恢复。数据结构、事件协议和异常处理见[运行机制与接口](./agent-runtime.md)。
 
 ## 运行与配置
 
@@ -39,7 +39,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 | `node --env-file=.env --import tsx test/e2e.ts` | 从 `.env` 加载 API 配置并调用真实模型执行端到端测试 |
 
 
-会话文件为 `~/.minipi/session.jsonl`。启动时加载历史，每轮结束后保存消息；旧命名的环境变量和会话目录不会自动读取或迁移。
+默认启动新会话，加 `-c` 或 `--continue` 可续聊当前工作目录最近的会话。文件位置和启动示例见[新开与继续会话](./sessions.md)。旧命名的环境变量和会话目录不会自动读取或迁移。
 
 ## 模块职责
 
@@ -101,13 +101,13 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 
 负责读取配置、加载会话、创建工具与 TUI、接收用户输入、驱动 `runAgent()`，并将事件转发到终端。每次用户输入使用独立的 `AbortController`；回合结束后保存上下文，在 `finally` 中恢复输入状态。
 
-导出 `loadSession()` 和 `persistSession()`，支持指定会话文件路径。模块仅在被直接执行时启动 CLI，导入时不启动交互界面。
+CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) 的 `openSession()` 选择会话文件、读取已有消息，并提供保存当前上下文的方法。
 
 ## 模块协作
 
 一次用户请求的处理顺序：
 
-1. TUI 将输入交给 CLI，CLI 追加 user 消息到 `Context`。
+1. TUI 将输入交给 CLI，CLI 追加 user 消息到 `Context` 并先保存到会话文件。
 2. Agent 调用 `stream()`，消费模型文本和工具调用事件。
 3. Agent 将 assistant 消息写入上下文；存在工具调用时，串行执行并写入结果，再发起下一次模型请求。
 4. CLI 将 `AgentEvent` 转发到 TUI。

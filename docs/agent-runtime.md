@@ -226,7 +226,7 @@ type AgentTool = {
 | --- | --- | --- |
 | `read_file` | `path` | 以 UTF-8 读取文本，并应用输出截断 |
 | `write_file` | `path`、`content` | 递归创建父目录，覆盖写入 UTF-8 文件 |
-| `edit` | `path`、`old_string`、`new_string` | 对唯一匹配的文本执行替换 |
+| `edit` | `path`、`old_string`、`new_string` | 对唯一匹配的文本执行替换；个人记忆文件按行新增或替换偏好 |
 | `run_bash` | `command` | 通过 Node.js `exec()` 执行 shell 命令 |
 
 相对路径以进程工作目录为基准。工具没有额外的目录隔离或命令审批机制，使用当前进程的文件与命令执行权限。
@@ -236,6 +236,8 @@ type AgentTool = {
 `write_file` 成功时返回 `wrote <path> (<length> chars)`，其中长度来自 JavaScript 字符串的 `length`。
 
 `edit` 检查 `old_string` 的匹配数量：未找到或匹配多处时抛出错误，唯一匹配时写回替换后的文件。替换使用函数返回 `new_string`，使 `$&`、`$1` 等字符保留为字面值。成功结果为 `edited <path>: replaced <length> chars`。
+
+个人 `~/.minipi/MEMORY.md` 通过 `edit` 维护，空 `old_string` 新增一条偏好，非空值须唯一匹配一整行。`write_file` 对这个路径返回工具错误，提示使用 `edit`。加载时机和失败处理见[跨会话记忆](./memory.md)。
 
 ### 命令执行与输出截断
 
@@ -260,20 +262,8 @@ Ctrl+C 回调仅在 busy 状态下触发，同一回合只触发一次；空闲�
 
 ## 会话持久化
 
-[cli.ts](../src/cli.ts) 导出以下接口，默认路径均为 `~/.minipi/session.jsonl`：
+[CLI](../src/cli.ts) 根据当前工作目录确定存储目录，再调用 [openSession(dir, resume)](../src/session.ts)。默认从空消息开始；续聊时按文件修改时间从新到旧查找，使用第一份含有效消息的文件。每行校验 `Message` 的角色、内容及内容块；空行、损坏行和结构不符的记录会跳过，磁盘读取错误则报告给用户。使用示例见[新开与继续会话](./sessions.md)。
 
-```typescript
-loadSession(file?: string): Promise<Message[]>
-persistSession(messages: Message[], file?: string): Promise<void>
-```
+会话使用 JSONL 格式，不保存 API 配置和 `systemPrompt`。第一次输入才创建文件。用户消息先落盘再调用模型；回合结束后，`session.save(context.messages)` 追加新增的回复和工具结果。若 Agent 压缩时换了消息数组，则先完整写入临时文件，再替换当前会话文件；替换失败时旧文件仍在。
 
-会话使用 JSONL 格式，每行是一条 `Message`，不保存 API 配置和 `systemPrompt`。CLI 每次启动重新设置固定的系统提示词。
-
-`loadSession()` 逐行解析 JSON，跳过空行和无法解析的行；文件读取失败时返回空数组。成功加载后，记录已持久化的消息数量，避免重复追加。解析不校验消息结构。
-
-`persistSession()` 创建父目录后，根据进程内的 `persistedCount` 保存消息：
-
-- 当前消息数不少于已保存数量时，只追加新增消息。
-- 当前消息数少于已保存数量时，重写整个文件，以保存压缩后的上下文。
-
-计数在保存成功后更新。该状态由 CLI 模块共享，面向单会话、单进程使用；仅依据数量判断是否重写，不检测等长历史替换或并发写入。
+保存成功后才更新该会话的写入位置。同一会话按单进程使用；两个终端同时续聊同一个文件时，不协调它们的写入。
