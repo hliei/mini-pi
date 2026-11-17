@@ -1,6 +1,6 @@
 # 模块与配置参考
 
-mini-pi 是使用 TypeScript 实现的命令行编码助手，支持 OpenAI 兼容的流式接口、工具调用、上下文压缩和本地会话恢复。源码由五个模块组成；数据结构、事件协议和异常处理见[运行机制与接口](./ch02-loop.md)。
+mini-pi 是使用 TypeScript 实现的命令行编码助手，支持 OpenAI 兼容的流式接口、工具调用、上下文压缩和本地会话恢复。源码由五个模块组成；数据结构、事件协议和异常处理见[运行机制与接口](./agent-runtime.md)。
 
 ## 运行与配置
 
@@ -76,7 +76,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 
 导出 `builtinTools()`，返回 `read_file`、`write_file`、`edit` 和 `run_bash` 四个 `AgentTool` 对象。工具接收参数并返回字符串结果，不直接读取或修改 `Context`。文件和命令操作具有外部副作用。
 
-工具通过传给 `runAgent()` 的数组注册。新增或替换工具时，需要提供符合 `AgentTool` 的对象，无需修改循环逻辑。参数和执行行为见[内置工具](./ch02-loop.md#内置工具)。
+工具通过传给 `runAgent()` 的数组注册。新增或替换工具时，需要提供符合 `AgentTool` 的对象，无需修改循环逻辑。参数和执行行为见[内置工具](./agent-runtime.md#内置工具)。
 
 ### tui.ts：终端交互
 
