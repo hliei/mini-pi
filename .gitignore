@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+.env*
+!.env.example
+*.log
+tmp.md
+docs/plans/
+docs/specs/
+skills-lock.json
+.agents/
