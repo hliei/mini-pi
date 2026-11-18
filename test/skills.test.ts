@@ -108,7 +108,7 @@ it('discovers at startup, reloads in place and replays the same request prefix o
   expect(resumed).toEqual([...bodyOnly, reply, user('续聊')])
   expect(removed).toEqual([...resumed, reply, builtin, user('删除后')])
   const [compacted, continued] = requests.slice(-2)
-  expect(compacted.filter(m => m.role === 'system')).toEqual([first[0], preference, builtin])
+  expect(compacted.filter(m => m.role === 'system')).toEqual([first[0], first[3], preference, builtin])
   expect(compacted).toContainEqual(user('[context summary]\nok'))
   expect(continued).toEqual([...compacted, reply, user('压缩后续聊')])
 })
@@ -134,7 +134,7 @@ it('appends full preference changes before the next user input and preserves the
   const [ten, toolResult, eleven, twelve, resumed, deleted, reset, cleared, empty] = requests.slice(9)
   expect(first[0].content).not.toContain('附统计日期')
   expect(first[2]).toEqual({ role: 'system', content: expect.stringContaining('附统计日期') })
-  expect(ten.filter(m => m.role === 'system')).toEqual(first.slice(0, 3))
+  expect(ten.filter(m => m.role === 'system')).toEqual(first.slice(0, 4))
   expect(toolResult.slice(0, -2)).toEqual(ten)
   expect(toolResult.at(-1)).toMatchObject({ role: 'tool', content: '个人偏好已保存' })
   const prefs = (text: string) => ({ role: 'system', content: expect.stringContaining(text) })
@@ -145,4 +145,27 @@ it('appends full preference changes before the next user input and preserves the
   expect(reset).toEqual([...deleted, reply, prefs('新偏好'), user('重新设置')])
   expect(cleared).toEqual([...reset, reply, deleted.at(-2), user('清空偏好')])
   expect(empty).toEqual([...cleared, reply, user('仍为空')])
+})
+
+it('refreshes knowledge without reload, preserves the prefix and reuses the index in fresh sessions', async () => {
+  const folder = path.join(dir, '.minipi', 'knowledge')
+  const file = path.join(folder, 'release.md')
+  const page = '---\ntitle: 发布流程\nscope: 项目 A\nsummary: 灰度不等于全量\nchange: 整理发布说明\nsources:\n  - source: 用户资料\n    date: "2026-11-18"\n    quote: 灰度完成之后还需审批\n---\n正文证据不应进入系统索引\n'
+  await chat([
+    () => '空知识库',
+    async () => { await fs.mkdir(folder); await fs.writeFile(file, page); return '新增后' },
+    () => '未变化',
+    async () => { await fs.writeFile(file, page.replace('灰度不等于全量', '灰度之后需要审批')); return '更新后' },
+  ])
+  await chat([() => '续聊'], '-c')
+  await chat([() => '空白会话'])
+  const [empty, added, same, updated, resumed, fresh] = await readRequests()
+  const knowledge = (summary: string) => ({ role: 'system', content: expect.stringContaining(summary) })
+  expect(added).toEqual([...empty, reply, knowledge('灰度不等于全量'), user('新增后')])
+  expect(added.at(-2)?.content).not.toContain('正文证据')
+  expect(same).toEqual([...added, reply, user('未变化')])
+  expect(updated).toEqual([...same, reply, knowledge('灰度之后需要审批'), user('更新后')])
+  expect(resumed).toEqual([...updated, reply, user('续聊')])
+  expect(fresh.filter(message => message.role === 'user')).toEqual([user('空白会话')])
+  expect(fresh).toContainEqual(knowledge('灰度之后需要审批'))
 })

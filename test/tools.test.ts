@@ -27,6 +27,25 @@ describe('builtinTools', () => {
     expect(await read.execute({ path: path.join(tmpDir, 'a.txt') })).toBe('hello')
   })
 
+  it('read_file 可补读长资料开头和后续区段，并校验行范围', async () => {
+    const read = findTool(builtinTools(), 'read_file')
+    const file = path.join(tmpDir, 'long.txt')
+    const lines = Array.from({ length: 405 }, (_, i) => `证据第 ${i + 1} 行`)
+    await fs.writeFile(file, lines.join('\n'))
+    expect(await read.execute({ path: file })).toContain('output truncated')
+    const parts = []
+    for (const offset of [1, 201, 401]) {
+      const result = await read.execute({ path: file, offset, limit: 200 })
+      parts.push(result.slice(result.indexOf('\n') + 1))
+      expect(result).toContain(offset === 401 ? 'end of file' : `next offset: ${offset + 200}`)
+    }
+    expect(parts.join('\n')).toBe(lines.join('\n'))
+    for (const args of [{ offset: 0 }, { offset: 1.5 }, { limit: 201 }, { limit: '10' }]) {
+      await expect(read.execute({ path: file, ...args })).rejects.toThrow('offset')
+    }
+    await expect(read.execute({ path: file, offset: 406 })).rejects.toThrow('总行数')
+  })
+
   it('write_file 写入文件', async () => {
     const write = findTool(builtinTools(), 'write_file')
     await write.execute({ path: path.join(tmpDir, 'b.txt'), content: 'world' })

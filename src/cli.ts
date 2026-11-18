@@ -15,6 +15,7 @@ import { builtinTools } from './tools.js'
 import { openSession } from './session.js'
 import { preferenceInstructions, preferencePrompt } from './memory.js'
 import { discoverSkills } from './skills.js'
+import { knowledgeInstructions, knowledgePrompt } from './knowledge.js'
 import type { Model, Context } from './llm.js'
 
 /** 固定 system prompt */
@@ -48,7 +49,7 @@ async function main() {
   const session = await openSession(dir, values.continue === true)
   let skillPrompt = await discoverSkills()
   const context: Context = {
-    systemPrompt: SYSTEM_PROMPT + '\n\n' + preferenceInstructions,
+    systemPrompt: SYSTEM_PROMPT + '\n\n' + preferenceInstructions + '\n\n' + knowledgeInstructions,
     messages: session.messages,
   }
 
@@ -68,9 +69,9 @@ async function main() {
       tui.onAbort(() => ctrl.abort())  // 每轮新建 AbortController，需重新注册回调指向新的 controller
       const previousLength = context.messages.length
       try {
-        const current = { skills: skillPrompt, preferences: await preferencePrompt() }
+        const current = { skills: skillPrompt, preferences: await preferencePrompt(), knowledge: await knowledgePrompt() }
         const latest = latestSystemMessages(context.messages)
-        for (const section of ['skills', 'preferences'] as const) {
+        for (const section of ['skills', 'preferences', 'knowledge'] as const) {
           if (latest.get(section)?.content !== current[section]) {
             context.messages.push({ role: 'system', section, content: current[section] })
           }
