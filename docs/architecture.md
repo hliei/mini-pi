@@ -26,6 +26,7 @@ CLI 启动时自动加载当前工作目录中的 `.env`，`npm run dev` 和 `no
 | `MINIPI_API_KEY` | API 密钥，必填；未设置时退出 | 无 |
 | `MINIPI_MODEL` | 模型名称 | `deepseek-flash` |
 | `MINIPI_BASE_URL` | OpenAI 兼容接口的基础地址 | `https://api.openai.com/v1` |
+| `MINIPI_SELF_EVOLUTION` | 是否启用空闲自动复盘；只接受 `true` / `false`，不影响手动 `/reflect` | `true` |
 
 CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completions`。默认模型名与默认接口地址不保证匹配，使用时应显式配置。
 
@@ -39,6 +40,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 | `node --env-file=.env --import tsx test/e2e.ts` | 从 `.env` 加载 API 配置并调用真实模型执行端到端测试 |
 | `node --env-file=.env --import tsx test/knowledge-e2e.ts` | 用临时目录及真实模型验证知识整理、跨目录周报引用与无关问题 |
 | `node --env-file=.env --import tsx test/multi-step-e2e.ts` | 用临时资料及真实模型验证缺口报告、补材料续聊与简单问题 |
+| `node --env-file=.env --import tsx test/evolution-e2e.ts` | 用临时资料验证复盘修订、全新会话与新材料复用、撤销恢复 |
 
 
 默认启动新会话，加 `-c` 或 `--continue` 可续聊当前工作目录最近的会话。文件位置和启动示例见[新开与继续会话](./sessions.md)。旧命名的环境变量和会话目录不会自动读取或迁移。
@@ -48,6 +50,8 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 分享项目资料后，助手可整理为个人主题知识页，在其他工作目录的新会话中按需读取、引用。知识索引每回合自动刷新。[个人知识库](./knowledge.md)
 
 多步任务说明关键进展，执行中保存完整的模型回复与工具结果。缺材料时报告缺口，补齐后可续聊处理。[多步执行与进度恢复](./multi-step-execution.md)
+
+`/reflect` 手动复盘，`/reflect list`、`show <id>`、`undo <id>` 查看和撤销修改。默认在空闲并达到门槛后自动复盘；新输入先取消并恢复尚未完成的后台修改。[复盘与自进化](./self-evolution.md)
 
 ## 模块职责
 
@@ -96,8 +100,10 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 | --- | --- |
 | `onPrompt(cb)` | 注册非空用户输入回调 |
 | `onAbort(cb)` | 注册运行期间的 Ctrl+C 回调 |
+| `onClose(cb)` | 注册输入关闭回调，供 CLI 清理计时器并取消后台复盘 |
 | `setBusy(busy)` | 设置运行状态，结束后恢复输入提示符 |
 | `printText(delta)` | 输出文本片段 |
+| `notify(text)` | 显示后台通知并重绘当前输入，保留已有输入回调 |
 | `printToolCall(name, args)` | 输出工具名称与 JSON 参数 |
 | `printToolResult(name, result)` | 输出工具结果 |
 | `printTurnEnd()` | 输出回合结束换行 |
@@ -110,6 +116,12 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 负责读取配置、加载会话、创建工具与 TUI、接收用户输入、驱动 `runAgent()`，并将显示事件转发到终端。普通请求使用独立的 `AbortController`。完整工具批次结束时保存上下文；保存失败时警告并继续，后续保存重试。整次调用结束后保存最终回复，在 `finally` 中恢复输入状态。
 
 CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) 的 `openSession()` 选择会话文件、读取已有消息，并提供保存当前上下文的方法。
+
+### evolution.ts / evolution-files.ts：复盘与恢复
+
+[evolution.ts](../src/evolution.ts)从当前会话选取新增文本，复用独立的 `runAgent()` 执行最多 12 轮，管理空闲门槛和新输入取消。只有完成后的摘要写回主会话；普通模型循环保留原有行为。
+
+[evolution-files.ts](../src/evolution-files.ts)限制复盘写入范围，在修改前记录旧状态，跟踪知识工具的索引和日志，提供查看与按 ID 恢复。CLI 收到复盘或撤销结果后刷新技能清单。无需新增依赖或后台服务。
 
 ## 模块协作
 
