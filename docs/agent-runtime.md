@@ -138,20 +138,21 @@ type AgentEvent =
   | { type: 'assistant_text'; delta: string }
   | { type: 'tool_call'; id: string; name: string; args: unknown }
   | { type: 'tool_result'; id: string; name: string; result: string }
+  | { type: 'step_end' }
   | { type: 'turn_end'; stopReason: 'end_turn' | 'max_tokens' | 'aborted' | 'error' }
 ```
 
-`tool_call` 表示收到模型的调用请求，不表示工具已经执行成功。工具结果由 `tool_result` 提供；`turn_end` 表示本次 Agent 调用结束。
+`tool_call` 表示收到模型的调用请求，不表示工具已经执行成功。工具结果由 `tool_result` 提供；`step_end` 表示一轮模型回复及其全部工具结果已写入上下文，可保存完整批次；`turn_end` 表示本次 Agent 调用结束。`step_end` 不表示任务完成。
 
 ### 执行顺序
 
 1. 检查上下文是否达到压缩阈值，必要时生成摘要。
 2. 调用 `stream()`，收集模型文本与工具调用，同时输出 `assistant_text` 和 `tool_call`。
 3. 将本次模型回复组装为 assistant 消息并写入上下文。
-4. 若输出被截断且包含工具调用，生成错误结果并进入下一次模型请求。
+4. 若输出被截断且包含工具调用，生成错误结果写入上下文，输出 `step_end` 后进入下一次模型请求。
 5. 若没有工具调用，输出 `turn_end` 并返回。
 6. 按接收顺序串行执行工具，每次执行后输出 `tool_result`。
-7. 将全部工具结果写为一条 user 消息，进入下一次循环。
+7. 将全部工具结果写为一条 user 消息，输出 `step_end`；CLI 等待本次保存完成后，进入下一次循环。
 
 工具名称不存在或 `execute()` 抛出异常时，Agent 将 `error: ...` 字符串作为工具结果写入上下文，模型可据此继续处理。循环没有固定步数上限。
 
@@ -256,6 +257,7 @@ TUI 以 `> ` 为输入提示符，去除输入首尾空白，空输入不触发 
 | `assistant_text` | `printText(delta)` | 直接写出文本片段 |
 | `tool_call` | `printToolCall(name, args)` | `[tool: <name>] <JSON 参数>` |
 | `tool_result` | `printToolResult(name, result)` | `[result: <name>] <结果>` |
+| `step_end` | 无显示方法；CLI 保存会话 | 保存失败时输出警告并继续 |
 | `turn_end` | `printTurnEnd()` | 换行 |
 
 CLI 在 `max_tokens` 结束时额外显示 `[output truncated by max_tokens]`，在 `error` 结束时显示 `[error occurred]`。外层 `try/catch/finally` 将未处理的异常打印到终端，并确保恢复输入状态。
@@ -266,6 +268,8 @@ Ctrl+C 回调仅在 busy 状态下触发，同一回合只触发一次；空闲�
 
 [CLI](../src/cli.ts) 根据当前工作目录确定存储目录，再调用 [openSession(dir, resume)](../src/session.ts)。默认从空消息开始；续聊时按文件修改时间从新到旧查找，使用第一份含有效消息的文件。每行校验 `Message` 的角色、内容及内容块；空行、损坏行和结构不符的记录会跳过，磁盘读取错误则报告给用户。使用示例见[新开与继续会话](./sessions.md)。
 
-会话使用 JSONL 格式，不保存 API 配置和 `systemPrompt`。第一次输入才创建文件。用户消息先落盘再调用模型；回合结束后，`session.save(context.messages)` 追加新增的回复和工具结果。若 Agent 压缩时换了消息数组，则先完整写入临时文件，再替换当前会话文件；替换失败时旧文件仍在。
+会话使用 JSONL 格式，不保存 API 配置和 `systemPrompt`。第一次输入才创建文件。用户消息先落盘再调用模型；CLI 在每次 `step_end` 时等待 `session.save(context.messages)` 追加完整的回复和工具结果，整次 Agent 调用结束后再保存最终回复。单个 `tool_result` 事件发出时，结果可能尚未进入上下文，不能以它为保存边界。若 Agent 压缩时换了消息数组，则先完整写入临时文件，再替换当前会话文件；替换失败时旧文件仍在。
+
+中途保存失败时报告警告并继续执行，下一次批次保存或最终保存会重试未保存的消息；最终保存失败由外层错误处理报告。恢复保证仅限成功保存的完整记录，不包括正在执行的批次和写入过程中强退。模型在续聊时利用记录继续，不保证不重读资料。行为和验收见[多步执行与进度恢复](./multi-step-execution.md)。
 
 保存成功后才更新该会话的写入位置。同一会话按单进程使用；两个终端同时续聊同一个文件时，不协调它们的写入。

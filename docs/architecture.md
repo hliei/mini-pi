@@ -38,6 +38,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 | `npm test` | 执行自动化测试 |
 | `node --env-file=.env --import tsx test/e2e.ts` | 从 `.env` 加载 API 配置并调用真实模型执行端到端测试 |
 | `node --env-file=.env --import tsx test/knowledge-e2e.ts` | 用临时目录及真实模型验证知识整理、跨目录周报引用与无关问题 |
+| `node --env-file=.env --import tsx test/multi-step-e2e.ts` | 用临时资料及真实模型验证缺口报告、补材料续聊与简单问题 |
 
 
 默认启动新会话，加 `-c` 或 `--continue` 可续聊当前工作目录最近的会话。文件位置和启动示例见[新开与继续会话](./sessions.md)。旧命名的环境变量和会话目录不会自动读取或迁移。
@@ -45,6 +46,8 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 在 Git 仓库中输入“写本周周报”会用到内置技能。已打开的会话可用 `/reload` 发现新技能。[按需使用技能](./skills.md) · [刷新与提示缓存](./reload.md)
 
 分享项目资料后，助手可整理为个人主题知识页，在其他工作目录的新会话中按需读取、引用。知识索引每回合自动刷新。[个人知识库](./knowledge.md)
+
+多步任务说明关键进展，执行中保存完整的模型回复与工具结果。缺材料时报告缺口，补齐后可续聊处理。[多步执行与进度恢复](./multi-step-execution.md)
 
 ## 模块职责
 
@@ -71,7 +74,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 
 负责调用模型、串行执行工具、更新上下文和触发上下文压缩。模型返回工具调用时，执行结果写回上下文后继续请求；没有工具调用、发生请求错误或收到中断时结束。
 
-导出 `runAgent()`、`AgentTool` 和 `AgentEvent`。`runAgent()` 修改传入的 `Context`，并输出 `assistant_text`、`tool_call`、`tool_result` 和 `turn_end` 四种事件。
+导出 `runAgent()`、`AgentTool` 和 `AgentEvent`。`runAgent()` 修改传入的 `Context`，并输出 `assistant_text`、`tool_call`、`tool_result`、`step_end` 和 `turn_end` 五种事件。`step_end` 是完整工具批次写入上下文后的保存边界。
 
 `StreamEvent` 描述模型响应，`AgentEvent` 描述完整的 Agent 执行过程。消费端使用后者，无需处理原始 API 响应。
 
@@ -104,7 +107,7 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 
 [源码](../src/cli.ts)
 
-负责读取配置、加载会话、创建工具与 TUI、接收用户输入、驱动 `runAgent()`，并将事件转发到终端。普通请求使用独立的 `AbortController`。回合结束后保存上下文，在 `finally` 中恢复输入状态。
+负责读取配置、加载会话、创建工具与 TUI、接收用户输入、驱动 `runAgent()`，并将显示事件转发到终端。普通请求使用独立的 `AbortController`。完整工具批次结束时保存上下文；保存失败时警告并继续，后续保存重试。整次调用结束后保存最终回复，在 `finally` 中恢复输入状态。
 
 CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) 的 `openSession()` 选择会话文件、读取已有消息，并提供保存当前上下文的方法。
 
@@ -114,8 +117,8 @@ CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) �
 
 1. TUI 将普通输入交给 CLI。CLI 依次追加有变化的技能清单、长期偏好和知识索引，再追加 user 消息，一同保存到会话文件。
 2. Agent 调用 `stream()`，消费模型文本和工具调用事件。
-3. Agent 将 assistant 消息写入上下文；存在工具调用时，串行执行并写入结果，再发起下一次模型请求。
-4. CLI 将 `AgentEvent` 转发到 TUI。
+3. Agent 将 assistant 消息写入上下文；存在工具调用时，串行执行并写入全部结果，发出 `step_end`。
+4. CLI 将显示事件转发到 TUI，在 `step_end` 时等待保存，再让循环进入下一次模型请求。
 5. Agent 结束后，CLI 保存会话并恢复输入。
 
 ![一次用户请求的数据流](./figures/full-roundtrip.png)

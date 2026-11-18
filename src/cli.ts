@@ -20,6 +20,8 @@ import type { Model, Context } from './llm.js'
 
 /** 固定 system prompt */
 const SYSTEM_PROMPT = `你是一个编码助手。用提供的工具读写文件和执行命令来完成任务。先阅读再修改，修改后可运行命令验证。
+多步任务开始执行时简述接下来的操作，过程中在关键进展处说明结果及依据。宣布要执行的操作应在同一轮实际调用工具，持续推进到完成或需要用户补充输入；简单问题直接回答。
+根据工具结果区分已完成与未完成。缺材料或工具失败时，说明已完成部分、缺口、原因和继续条件；能独立完成的部分继续处理，必要输入缺失时等待用户补充，不把部分完成说成全部完成。续聊时利用已有记录继续，按需重新核对资料。
 按最近的技能清单判断任务。若用途匹配，选最相关的一项，用 read_file 读取清单给出的完整路径，再按正文执行。若读取失败，本次技能任务就此结束，直接向用户报告工具返回的完整路径和失败原因，不再猜测步骤或改用其他工具执行。无匹配时直接处理，不读取技能。`
 
 async function main() {
@@ -56,7 +58,7 @@ async function main() {
   const tools = builtinTools()
   const tui = new Tui()
 
-  // 每轮：用户输入 → runAgent → 事件转发到 TUI → 持久化
+  // 每轮：保存用户输入 → runAgent → 显示进展并保存完整批次 → 保存最终回复
   tui.onPrompt(async (text) => {
     try {
       tui.setBusy(true)
@@ -91,6 +93,14 @@ async function main() {
           case 'assistant_text': tui.printText(ev.delta); break
           case 'tool_call': tui.printToolCall(ev.name, ev.args); break
           case 'tool_result': tui.printToolResult(ev.name, ev.result); break
+          case 'step_end':
+            try {
+              await session.save(context.messages)
+            } catch (e) {
+              // 保留内存中的结果继续执行，后续保存重试未落盘的消息。
+              console.error(`\n[warning] 会话进度保存失败，后续保存将重试：${e instanceof Error ? e.message : String(e)}`)
+            }
+            break
           case 'turn_end':
             if (ev.stopReason === 'max_tokens') tui.printText('\n[output truncated by max_tokens]')
             if (ev.stopReason === 'error') tui.printText('\n[error occurred]')

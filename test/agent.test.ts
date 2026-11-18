@@ -91,7 +91,7 @@ describe('runAgent', () => {
     const events: AgentEvent[] = []
     for await (const e of runAgent(model, ctx, [echoTool])) events.push(e)
 
-    expect(events.map(e => e.type)).toEqual(['tool_call', 'tool_result', 'assistant_text', 'turn_end'])
+    expect(events.map(e => e.type)).toEqual(['tool_call', 'tool_result', 'step_end', 'assistant_text', 'turn_end'])
     const tr = events.find(e => e.type === 'tool_result')
     expect(tr?.result).toBe('ECHO: hi')
     // 3 条消息：assistant(tool_use) + user(tool_result) + assistant(text)
@@ -116,5 +116,34 @@ describe('runAgent', () => {
 
     const tr = events.find(e => e.type === 'tool_result')
     expect(tr?.result).toContain('not found')
+  })
+
+  it.each(['success', 'truncated', 'aborted'] as const)('完整批次才可保存：%s', async (mode) => {
+    const ctrl = new AbortController()
+    const execute = vi.fn(async () => {
+      if (mode === 'aborted') ctrl.abort()
+      return '已核对'
+    })
+    mockStreamFn.mockImplementation(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'done', stopReason: 'end_turn' }
+    }).mockImplementationOnce(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'tool_call', id: 't1', name: 'check', args: {} }
+      yield { type: 'tool_call', id: 't2', name: 'check', args: {} }
+      yield { type: 'done', stopReason: mode === 'truncated' ? 'max_tokens' : 'tool_use' }
+    })
+    const ctx: Context = { messages: [{ role: 'user', content: '核对提交和里程碑' }] }
+    const events: AgentEvent[] = []
+    for await (const event of runAgent(model, ctx, [{ name: 'check', description: '', parameters: {}, execute }], ctrl.signal)) {
+      events.push(event)
+      if (event.type === 'step_end') break
+    }
+    expect(events.map(event => event.type)).toEqual(['tool_call', 'tool_call', 'tool_result', 'tool_result', 'step_end'])
+    expect(mockStreamFn).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledTimes(mode === 'truncated' ? 0 : mode === 'aborted' ? 1 : 2)
+    expect(ctx.messages).toHaveLength(3)
+    expect(ctx.messages.at(-1)).toEqual({ role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 't1', content: mode === 'truncated' ? expect.stringContaining('output truncated') : '已核对' },
+      { type: 'tool_result', tool_use_id: 't2', content: mode === 'truncated' ? expect.stringContaining('output truncated') : mode === 'aborted' ? 'error: aborted' : '已核对' },
+    ] })
   })
 })

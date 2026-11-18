@@ -7,6 +7,7 @@ import * as os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import { openSession } from '../src/session.js'
 import type { Message } from '../src/llm.js'
 
@@ -103,6 +104,59 @@ describe('session persistence', () => {
     expect(fresh.systems).toContainEqual(expect.stringContaining('周报先放风险表'))
     expect(run(dir, 'A3\n').prompts).toEqual(['A3'])
     expect(run(dir, 'A4\n', '--continue').prompts).toEqual(['A3', 'A4'])
+  })
+
+  it.each([false, true])('执行中退出仍能续聊，保存曾失败：%s', async (failSave) => {
+    await fs.writeFile(path.join(dir, 'commits.txt'), 'c42：修复超时；性能回归待完成')
+    // 在第三次请求直接退出，不给整次 Agent 调用收尾保存的机会。
+    const probe = `import { promises as fs } from 'node:fs'
+      const append = fs.appendFile.bind(fs)
+      let writes = 0
+      fs.appendFile = async (...args) => {
+        if (++writes === 2 && ${failSave}) throw new Error('injected save failure')
+        return append(...args)
+      }
+      let requests = 0
+      globalThis.fetch = () => {
+        if (++requests === 3) process.exit(17)
+        const file = requests === 1 ? 'commits.txt' : 'milestones.txt'
+        return Promise.resolve(new Response('data: ' + JSON.stringify({ choices: [{
+          delta: { tool_calls: [{ index: 0, id: 't' + requests,
+            function: { name: 'read_file', arguments: JSON.stringify({ path: file }) } }] },
+          finish_reason: 'tool_calls'
+        }] }) + '\\n\\ndata: [DONE]\\n\\n'))
+      }`
+    function run(input: string, script: string, ...args: string[]) {
+      return spawnSync(process.execPath, [
+        '--import', createRequire(import.meta.url).resolve('tsx'),
+        '--import', `data:text/javascript,${encodeURIComponent(script)}`,
+        fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args,
+      ], { cwd: dir, env: { ...process.env, HOME: dir, MINIPI_API_KEY: 'test-key' }, input, encoding: 'utf8', timeout: 5000 })
+    }
+    const interrupted = run('核对提交和里程碑\n', probe)
+    expect(interrupted.status, interrupted.stderr).toBe(17)
+    if (failSave) expect(interrupted.stderr).toContain('会话进度保存失败')
+    else expect(interrupted.stderr).toBe('')
+
+    const cwdKey = createHash('sha256').update(await fs.realpath(dir)).digest('hex')
+    const saved = await openSession(path.join(dir, '.minipi', 'sessions', cwdKey), true)
+    expect(saved.messages.filter(message => Array.isArray(message.content))).toEqual([
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: { path: 'commits.txt' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'c42：修复超时；性能回归待完成' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'read_file', input: { path: 'milestones.txt' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: expect.stringContaining('ENOENT') }] },
+    ])
+    const resumed = run('继续\n', `globalThis.fetch = (_url, init) => {
+      console.log('REQUEST:' + init.body)
+      process.exit(0)
+    }`, '--continue')
+    expect(resumed.status, resumed.stderr).toBe(0)
+    const request: unknown = JSON.parse(resumed.stdout.split('REQUEST:')[1])
+    expect(request).toMatchObject({ messages: expect.arrayContaining([
+      { role: 'tool', tool_call_id: 't1', content: 'c42：修复超时；性能回归待完成' },
+      { role: 'tool', tool_call_id: 't2', content: expect.stringContaining('ENOENT') },
+      { role: 'user', content: '继续' },
+    ]) })
   })
 
   it('selects by last activity, skips invalid records and resumes after a torn line', async () => {
