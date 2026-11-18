@@ -19,6 +19,7 @@ export type AgentEvent =
   | { type: 'assistant_text'; delta: string }
   | { type: 'tool_call'; id: string; name: string; args: unknown }
   | { type: 'tool_result'; id: string; name: string; result: string }
+  | { type: 'step_end' }
   | { type: 'turn_end'; stopReason: 'end_turn' | 'max_tokens' | 'aborted' | 'error' }
 
 /** compaction 触发阈值：消息数超过此值时压缩旧消息 */
@@ -139,6 +140,7 @@ export async function* runAgent(
       for (let i = 0; i < toolCalls.length; i++) {
         yield { type: 'tool_result', id: toolCalls[i].id, name: toolCalls[i].name, result: results[i].content }
       }
+      yield { type: 'step_end' }
       continue
     }
 
@@ -176,7 +178,8 @@ export async function* runAgent(
       yield { type: 'tool_result', id: tc.id, name: tc.name, result: 'error: aborted' }
     }
 
-    // 7. 把 tool_result 放回到 Context，进入下一轮
+    // 7. 完整批次进入 Context 后再通知保存，避免落下未配对的工具调用。
     context.messages.push(buildToolResultMessage(results))
+    yield { type: 'step_end' }
   }
 }
