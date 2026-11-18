@@ -37,11 +37,14 @@ CLI 将 `maxTokens` 固定为 `4096`，请求地址为 `${baseUrl}/chat/completi
 | `node dist/cli.js` | 运行编译后的 CLI |
 | `npm test` | 执行自动化测试 |
 | `node --env-file=.env --import tsx test/e2e.ts` | 从 `.env` 加载 API 配置并调用真实模型执行端到端测试 |
+| `node --env-file=.env --import tsx test/knowledge-e2e.ts` | 用临时目录及真实模型验证知识整理、跨目录周报引用与无关问题 |
 
 
 默认启动新会话，加 `-c` 或 `--continue` 可续聊当前工作目录最近的会话。文件位置和启动示例见[新开与继续会话](./sessions.md)。旧命名的环境变量和会话目录不会自动读取或迁移。
 
 在 Git 仓库中输入“写本周周报”会用到内置技能。已打开的会话可用 `/reload` 发现新技能。[按需使用技能](./skills.md) · [刷新与提示缓存](./reload.md)
+
+分享项目资料后，助手可整理为个人主题知识页，在其他工作目录的新会话中按需读取、引用。知识索引每回合自动刷新。[个人知识库](./knowledge.md)
 
 ## 模块职责
 
@@ -109,7 +112,7 @@ CLI 只在直接运行时启动交互界面。[session.ts](../src/session.ts) �
 
 一次用户请求的处理顺序：
 
-1. TUI 将普通输入交给 CLI。CLI 依次追加有变化的技能清单和长期偏好，再追加 user 消息，一同保存到会话文件。
+1. TUI 将普通输入交给 CLI。CLI 依次追加有变化的技能清单、长期偏好和知识索引，再追加 user 消息，一同保存到会话文件。
 2. Agent 调用 `stream()`，消费模型文本和工具调用事件。
 3. Agent 将 assistant 消息写入上下文；存在工具调用时，串行执行并写入结果，再发起下一次模型请求。
 4. CLI 将 `AgentEvent` 转发到 TUI。

@@ -10,6 +10,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import type { AgentTool } from './agent.js'
 import { editPreference, memoryFile } from './memory.js'
+import { isKnowledgePath, writeKnowledge } from './knowledge.js'
 
 const execAsync = promisify(exec)
 
@@ -34,17 +35,32 @@ async function truncateOutput(content: string, maxLines = MAX_OUTPUT_LINES): Pro
 /** read_file：返回文件内容（截取尾部防止超大输出） */
 const readFile: AgentTool = {
   name: 'read_file',
-  description: '读取文件内容。参数：path（文件路径）。大文件截取最后 200 行。',
+  description: '读取文本文件。默认返回全文或最后 200 行；可用 offset（从 1 开始）和 limit（最多 200）按行补读。',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: '要读取的文件路径' },
+      offset: { type: 'integer', minimum: 1, description: '起始行，从 1 开始' },
+      limit: { type: 'integer', minimum: 1, maximum: 200, description: '返回行数，默认 200' },
     },
     required: ['path'],
   },
   execute: async (args) => {
-    const { path: filePath } = args as { path: string }
+    if (!args || typeof args !== 'object' || !('path' in args) || typeof args.path !== 'string') throw new Error('read_file 需要字符串 path')
+    const { path: filePath } = args
+    const offset = 'offset' in args ? args.offset : 1
+    const limit = 'limit' in args ? args.limit : MAX_OUTPUT_LINES
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 1 ||
+        typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_OUTPUT_LINES) {
+      throw new Error('offset 必须是正整数，limit 必须是 1–200 的整数')
+    }
     const content = await fs.readFile(filePath, 'utf-8')
+    if ('offset' in args || 'limit' in args) {
+      const lines = content.split('\n')
+      if (offset > lines.length) throw new Error(`起始行 ${offset} 超出文件总行数 ${lines.length}`)
+      const end = Math.min(offset - 1 + limit, lines.length)
+      return `[lines ${offset}-${end} of ${lines.length}${end < lines.length ? `; next offset: ${end + 1}` : '; end of file'}]\n` + lines.slice(offset - 1, end).join('\n')
+    }
     return await truncateOutput(content)
   },
 }
@@ -62,8 +78,12 @@ const writeFile: AgentTool = {
     required: ['path', 'content'],
   },
   execute: async (args) => {
-    const { path: filePath, content } = args as { path: string; content: string }
+    if (!args || typeof args !== 'object' ||
+        !('path' in args) || typeof args.path !== 'string' ||
+        !('content' in args) || typeof args.content !== 'string') throw new Error('write_file 需要字符串 path 和 content')
+    const { path: filePath, content } = args
     if (path.resolve(filePath) === memoryFile) throw new Error('请用 edit 更新个人偏好，每次只改一条')
+    if (isKnowledgePath(filePath)) return writeKnowledge(filePath, content)
     await fs.mkdir(path.dirname(filePath) || '.', { recursive: true })
     await fs.writeFile(filePath, content, 'utf-8')
     return `wrote ${filePath} (${content.length} chars)`
@@ -92,6 +112,7 @@ const edit: AgentTool = {
     }
     const { path: filePath, old_string, new_string } = args
     if (path.resolve(filePath) === memoryFile) return editPreference(old_string, new_string)
+    if (isKnowledgePath(filePath)) return writeKnowledge(filePath, new_string, old_string)
     const content = await fs.readFile(filePath, 'utf-8')
     const count = content.split(old_string).length - 1
     if (count === 0) throw new Error(`old_string not found in ${filePath}`)

@@ -34,8 +34,10 @@ describe('runAgent', () => {
     const latest = { role: 'system', section: 'skills', content: '新版技能清单' } as const
     const prefs = { role: 'system', section: 'preferences', content: '风险优先' } as const
     const cleared = { ...prefs, content: '当前长期偏好为空，取代此前版本。' }
+    const knowledge = { role: 'system', section: 'knowledge', content: '当前知识索引' } as const
     const ctx: Context = { messages: [
       { ...latest, content: '旧版技能清单' }, { ...prefs, content: '结论优先' }, prefs, latest,
+      { ...knowledge, content: '旧索引' }, knowledge,
       ...Array.from({ length: 48 }, (_, i) => ({ role: 'user' as const, content: String(i) })),
       cleared,
     ] }
@@ -44,8 +46,8 @@ describe('runAgent', () => {
       yield { type: 'done', stopReason: 'end_turn' }
     })
     for await (const _ of runAgent(model, ctx, [])) { /* 消费摘要和正常回复 */ }
-    expect(ctx.messages.slice(0, 4)).toEqual([
-      prefs, latest, { role: 'user', content: '[context summary]\n完成' }, { role: 'user', content: '29' },
+    expect(ctx.messages.slice(0, 5)).toEqual([
+      prefs, latest, knowledge, { role: 'user', content: '[context summary]\n完成' }, { role: 'user', content: '29' },
     ])
     expect(ctx.messages.at(-2)).toEqual(cleared)
   })

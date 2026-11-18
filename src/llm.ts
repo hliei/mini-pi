@@ -23,7 +23,7 @@ export type ContentBlock =
   | { type: 'tool_result'; tool_use_id: string; content: string }
 
 /** 同类系统消息每次给出完整内容，在聊天中保留生效位置。 */
-export type SystemMessage = { role: 'system'; section: 'skills' | 'preferences'; content: string }
+export type SystemMessage = { role: 'system'; section: 'skills' | 'preferences' | 'knowledge'; content: string }
 
 export type Message = {
   role: 'user' | 'assistant'

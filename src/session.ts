@@ -24,7 +24,7 @@ function readMessages(data: string): Message[] {
     let value: unknown
     try { value = JSON.parse(line) } catch { continue }
     if (!isRecord(value)) continue
-    if (value.role === 'system' && (value.section === 'skills' || value.section === 'preferences') && typeof value.content === 'string') {
+    if (value.role === 'system' && (value.section === 'skills' || value.section === 'preferences' || value.section === 'knowledge') && typeof value.content === 'string') {
       messages.push({ role: 'system', section: value.section, content: value.content })
       continue
     }

@@ -22,7 +22,7 @@ type ContentBlock =
 type Message = {
   role: 'user' | 'assistant'
   content: string | ContentBlock[]
-} | { role: 'system'; section: 'skills' | 'preferences'; content: string }
+} | { role: 'system'; section: 'skills' | 'preferences' | 'knowledge'; content: string }
 
 type Context = {
   systemPrompt?: string
@@ -201,7 +201,7 @@ Ctrl+C → Tui.onAbort 回调 → controller.abort()
 | `COMPACT_THRESHOLD` | `50` | 消息数量达到 50 条时尝试压缩 |
 | `KEEP_RECENT` | `20` | 保留最近 20 条消息 |
 
-压缩时，将较早的聊天序列化为文本，使用同一模型发起不携带工具的摘要请求。旧消息中最后一份技能清单和最后一份长期偏好按原顺序保留在摘要前面。非空摘要写为一条 user 消息，格式为 `[context summary]\n<摘要>`，其后保留最近 20 条消息。
+压缩时，将较早的聊天序列化为文本，使用同一模型发起不携带工具的摘要请求。旧消息中最后一份技能清单、长期偏好和知识索引按原顺序保留在摘要前面。非空摘要写为一条 user 消息，格式为 `[context summary]\n<摘要>`，其后保留最近 20 条消息。
 
 signal 已中断、摘要请求报错或中断、摘要为空时，保留原始消息。当前实现按消息数量切分，不估算 token 数，也不调整工具调用与结果的切分边界；消息较长时仍可能超出模型上下文限制。摘要请求以 `max_tokens` 结束且已有文本时，当前实现仍会使用该文本。
 
@@ -220,11 +220,11 @@ type AgentTool = {
 
 `parameters` 为提供给模型的 JSON Schema。当前 Agent 不根据该 schema 校验参数，直接将模型输出传给 `execute()`。
 
-`builtinTools()` 按下表顺序返回四个工具，表中参数均为必填字符串：
+`builtinTools()` 按下表顺序返回四个工具；除 `read_file` 的可选整数行范围外，表中参数均为必填字符串：
 
 | 工具 | 参数 | 行为 |
 | --- | --- | --- |
-| `read_file` | `path` | 以 UTF-8 读取文本，并应用输出截断 |
+| `read_file` | `path`，可选 `offset`、`limit` | 默认以 UTF-8 读取并应用输出截断；指定行范围时从 `offset`（起点为 1）读最多 `limit` 行（1–200），返回总行数与下一段起点 |
 | `write_file` | `path`、`content` | 递归创建父目录，覆盖写入 UTF-8 文件 |
 | `edit` | `path`、`old_string`、`new_string` | 对唯一匹配的文本执行替换；个人记忆文件按行新增或替换偏好 |
 | `run_bash` | `command` | 通过 Node.js `exec()` 执行 shell 命令 |
@@ -239,11 +239,13 @@ type AgentTool = {
 
 个人 `~/.minipi/MEMORY.md` 通过 `edit` 维护，空 `old_string` 新增一条偏好，非空值须唯一匹配一整行。`write_file` 对这个路径返回工具错误，提示使用 `edit`。加载时机和失败处理见[跨会话记忆](./memory.md)。
 
+个人知识目录中的主题页使用 `write_file` 新建、`edit` 更新，检查格式及旧内容后原子替换，再更新索引和变更日志。已存在的页面不能被不同内容整体覆盖，索引和日志不能直接编辑；部分完成逐项报告。`read_file`、`write_file`、`edit` 在工具边界校验参数。[知识库格式与失败恢复](./knowledge.md)
+
 ### 命令执行与输出截断
 
 `run_bash` 的超时为 30 秒，`maxBuffer` 为 1 MiB。成功时返回 stdout；存在 stderr 时，将其与 stdout 分别标记后合并。命令失败时返回包含退出码、stderr 和 stdout 的字符串；signal 中断时返回 `aborted`。
 
-`read_file` 和成功的 `run_bash` 输出超过 200 行时，仅返回最后 200 行，并将完整内容写入系统临时目录下的 `minipi-output-<pid>-<counter>.txt`。返回值首部包含总行数和完整输出路径。命令失败的返回分支不经过这一截断处理。
+未指定行范围的 `read_file` 和成功的 `run_bash` 输出超过 200 行时，仅返回最后 200 行，并将完整内容写入系统临时目录下的 `minipi-output-<pid>-<counter>.txt`。返回值首部包含总行数和完整输出路径。需要完整资料时用 `read_file` 的 `offset`、`limit` 补读；直接重读临时文件仍会触发默认截断。命令失败的返回分支不经过这一截断处理。
 
 ## 终端交互与 CLI
 

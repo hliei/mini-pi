@@ -100,7 +100,7 @@ describe('session persistence', () => {
     const fresh = run(projectB, 'B1\n', '-c')
     expect(fresh.prompts).toEqual(['B1'])
     expect(fresh.systems[0]).not.toContain('周报先放风险表')
-    expect(fresh.systems.at(-1)).toContain('周报先放风险表')
+    expect(fresh.systems).toContainEqual(expect.stringContaining('周报先放风险表'))
     expect(run(dir, 'A3\n').prompts).toEqual(['A3'])
     expect(run(dir, 'A4\n', '--continue').prompts).toEqual(['A3', 'A4'])
   })
@@ -136,6 +136,7 @@ describe('session persistence', () => {
       { role: 'user', content: 'old-3' },
     )
     const compacted: Message[] = [
+      { role: 'system', section: 'knowledge', content: '当前知识索引' },
       { role: 'user', content: '[context summary]' },
       { role: 'assistant', content: 'recent' },
     ]
