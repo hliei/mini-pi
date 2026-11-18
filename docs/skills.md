@@ -24,3 +24,5 @@ description: 为当前项目整理版本发布说明。
 省略 `name` 时使用目录名。`description` 需要是非空文本，模型靠它选择技能。想调整周报时，可以把内置文件复制到 `~/.minipi/skills/weekly-report/SKILL.md` 后编辑。发现时，有效的同名个人版接替内置版，缺少用途的个人版会被跳过。模型已选定路径后，如果读取正文失败，会收到工具错误并说明路径与原因。[CowAgent 的同名覆盖规则](https://github.com/zhayujie/CowAgent/blob/bcc36de52ca17b45d1132f388a04b7a456bd3f95/agent/skills/loader.py#L313-L336)
 
 新会话在启动时发现技能。已经打开的会话输入 `/reload` 后就能使用新增技能，也能继续之前的聊天。清单与正文的刷新时机见[手动刷新与提示缓存](./reload.md)。
+
+阶段五[复盘](./self-evolution.md)可修订或创建个人技能，完成或撤销后自动刷新当前清单。复盘保护内置技能名称，不能修改上面示例的同名 `weekly-report` 覆盖；用于自进化实验的技能应另取名称，例如 `my-weekly-report`。普通手动编辑和同名覆盖规则不变。

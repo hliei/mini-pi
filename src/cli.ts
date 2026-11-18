@@ -16,13 +16,16 @@ import { openSession } from './session.js'
 import { preferenceInstructions, preferencePrompt } from './memory.js'
 import { discoverSkills } from './skills.js'
 import { knowledgeInstructions, knowledgePrompt } from './knowledge.js'
+import { createEvolution, reflectionUndoTool } from './evolution.js'
+import { listReflections, readReflection, reflectionDiff, undoReflection } from './evolution-files.js'
 import type { Model, Context } from './llm.js'
 
 /** 固定 system prompt */
 const SYSTEM_PROMPT = `你是一个编码助手。用提供的工具读写文件和执行命令来完成任务。先阅读再修改，修改后可运行命令验证。
 多步任务开始执行时简述接下来的操作，过程中在关键进展处说明结果及依据。宣布要执行的操作应在同一轮实际调用工具，持续推进到完成或需要用户补充输入；简单问题直接回答。
 根据工具结果区分已完成与未完成。缺材料或工具失败时，说明已完成部分、缺口、原因和继续条件；能独立完成的部分继续处理，必要输入缺失时等待用户补充，不把部分完成说成全部完成。续聊时利用已有记录继续，按需重新核对资料。
-按最近的技能清单判断任务。若用途匹配，选最相关的一项，用 read_file 读取清单给出的完整路径，再按正文执行。若读取失败，本次技能任务就此结束，直接向用户报告工具返回的完整路径和失败原因，不再猜测步骤或改用其他工具执行。无匹配时直接处理，不读取技能。`
+按最近的技能清单判断任务。若用途匹配，选最相关的一项，用 read_file 读取清单给出的完整路径，再按正文执行。若读取失败，本次技能任务就此结束，直接向用户报告工具返回的完整路径和失败原因，不再猜测步骤或改用其他工具执行。无匹配时直接处理，不读取技能。
+用户明确要求撤销复盘时，从对应 [EVOLUTION] 记录取 id 调用 undo_reflection，不要用文件工具手动恢复。`
 
 async function main() {
   const { values } = parseArgs({ options: { continue: { type: 'boolean', short: 'c' } } })
@@ -44,6 +47,8 @@ async function main() {
     baseUrl: process.env.MINIPI_BASE_URL ?? 'https://api.openai.com/v1',
     maxTokens: 4096,
   }
+  const evolutionEnabled = process.env.MINIPI_SELF_EVOLUTION ?? 'true'
+  if (evolutionEnabled !== 'true' && evolutionEnabled !== 'false') throw new Error('MINIPI_SELF_EVOLUTION 需要 true 或 false')
 
   // 用路径摘要区分工作目录，避免长路径或目录名中的特殊字符影响存储。
   const cwdKey = createHash('sha256').update(process.cwd()).digest('hex')
@@ -55,16 +60,62 @@ async function main() {
     messages: session.messages,
   }
 
-  const tools = builtinTools()
   const tui = new Tui()
+  let foreground = false
+  const refreshSkills = async () => { skillPrompt = await discoverSkills() }
+  const evolution = createEvolution(model, context, process.cwd(), async (record) => {
+    const notice = `[EVOLUTION] id=${record.id}\n${record.summary}\n` +
+      record.changes.map(change => change.path).join('\n') +
+      `\n查看：/reflect show ${record.id}\n撤销：/reflect undo ${record.id}`
+    context.messages.push({ role: 'assistant', content: notice })
+    try { await session.save(context.messages) } catch (error) {
+      console.error(`[warning] 复盘已应用，通知保存失败：${String(error)}`)
+    }
+    try { await refreshSkills() } catch (error) {
+      console.error(`[warning] 复盘已应用，技能清单刷新失败，请 /reload：${String(error)}`)
+    }
+    if (foreground) tui.printText('\n' + notice + '\n')
+    else tui.notify(notice)
+  })
+  const tools = [...builtinTools(), reflectionUndoTool(process.cwd(), refreshSkills)]
+  const timer = evolutionEnabled === 'true' ? setInterval(() => {
+    void evolution.tick().catch(error => tui.notify(`[error] 自动复盘失败：${String(error)}`))
+  }, 60_000) : undefined
+  timer?.unref()
+  tui.onClose(() => {
+    clearInterval(timer)
+    if (!foreground) void evolution.close().catch(error => console.error(`[error] 复盘退出恢复失败：${String(error)}`))
+  })
 
   // 每轮：保存用户输入 → runAgent → 显示进展并保存完整批次 → 保存最终回复
   tui.onPrompt(async (text) => {
+    let countTurn = false
+    foreground = true
     try {
       tui.setBusy(true)
+      await evolution.beginTurn()
       if (text === '/reload') {
         skillPrompt = await discoverSkills()
         tui.printText('技能清单已刷新。\n')
+        return
+      }
+      if (text === '/reflect' || text.startsWith('/reflect ')) {
+        const [, command, id, extra] = text.split(/\s+/)
+        if (!command) {
+          tui.onAbort(() => { void evolution.cancel().catch(() => {}) }) // 外层 await 负责报告恢复错误。
+          if (!await evolution.run()) tui.printText('复盘结束，未应用修改。\n')
+        } else if (command === 'list' && !id) {
+          const records = await listReflections(process.cwd())
+          tui.printText(records.map(record => `${record.id} [${record.status}] ${record.summary}`).join('\n') + (records.length ? '\n' : '暂无复盘记录。\n'))
+        } else if (command === 'show' && id && !extra) {
+          tui.printText(reflectionDiff(await readReflection(process.cwd(), id)) + '\n')
+        } else if (command === 'undo' && id && !extra) {
+          const result = await undoReflection(process.cwd(), id)
+          await refreshSkills()
+          context.messages.push({ role: 'assistant', content: `[EVOLUTION] ${result}` })
+          await session.save(context.messages)
+          tui.printText(result + '\n')
+        } else tui.printText('用法：/reflect | /reflect list | /reflect show <id> | /reflect undo <id>\n')
         return
       }
       const ctrl = new AbortController()
@@ -83,6 +134,7 @@ async function main() {
         context.messages.push({ role: 'user', content: text })
         try {
           await session.save(context.messages)
+          countTurn = true
         } catch (e) {
           context.messages.length = previousLength
           throw e
@@ -113,6 +165,8 @@ async function main() {
     } catch (e) {
       console.error(`\n[error] ${(e as Error).message}`)
     } finally {
+      evolution.endTurn(countTurn)
+      foreground = false
       tui.setBusy(false)
     }
   })

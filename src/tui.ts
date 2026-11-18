@@ -9,6 +9,7 @@ export class Tui {
   private rl: readline.Interface | null = null
   private onPromptCb: ((text: string) => void) | null = null
   private onAbortCb: (() => void) | null = null
+  private onCloseCb: (() => void) | null = null
   private aborted = false
   private busy = false  // agent 运行中时为 true，阻止并发输入
 
@@ -22,11 +23,19 @@ export class Tui {
     this.onAbortCb = cb
   }
 
+  onClose(cb: () => void): void {
+    this.onCloseCb = cb
+  }
+
   /** 启动 TUI，开始读输入 */
   start(): void {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
+    })
+    this.rl.on('close', () => {
+      this.rl = null
+      this.onCloseCb?.()
     })
     process.stdin.on('keypress', (_ch: string, key: { ctrl?: boolean; name?: string } | undefined) => {
       // 只在 agent 运行时处理 Ctrl+C，空闲时交给 readline 默认行为
@@ -62,6 +71,16 @@ export class Tui {
   /** 流式打印 assistant 文本 delta */
   printText(delta: string): void {
     process.stdout.write(delta)
+  }
+
+  /** 后台结果不创建第二个输入回调，重绘时保留正在输入的内容。 */
+  notify(text: string): void {
+    if (process.stdout.isTTY) {
+      readline.clearLine(process.stdout, 0)
+      readline.cursorTo(process.stdout, 0)
+    }
+    process.stdout.write('\n' + text + '\n')
+    if (!this.busy && this.rl) this.rl.prompt(true)
   }
 
   /** 打印 tool 调用 */

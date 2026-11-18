@@ -23,7 +23,7 @@ export type AgentEvent =
   | { type: 'turn_end'; stopReason: 'end_turn' | 'max_tokens' | 'aborted' | 'error' }
 
 /** compaction 触发阈值：消息数超过此值时压缩旧消息 */
-const COMPACT_THRESHOLD = 50
+export const COMPACT_THRESHOLD = 50
 /** compaction 保留近期消息数 */
 const KEEP_RECENT = 20
 
